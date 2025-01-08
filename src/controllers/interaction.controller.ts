@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import prisma from '../utils/prisma';
 import { formatDuration } from '../utils/duration';
 import { uploadImageToCloudinary } from '../utils/uploadImageToCloudinary';
+import { extractPublicIdFromUrl } from '../utils/extractPublicIdFromUrl';
+import cloudinary from '../config/cloudinaryConfig';
 
 export async function toggleLike(req: Request, res: Response) {
   const threadId = parseInt(req.params.threadId);
@@ -171,6 +173,7 @@ export async function createReply(req: Request, res: Response) {
     return res.status(201).json({
       message: 'Reply created successfully',
       ...newReply,
+      authorId: userId,
       duration: formattedDuration,
     });
   } catch (error) {
@@ -199,19 +202,43 @@ export async function toggleReplyLike(req: Request, res: Response) {
       await prisma.replyLike.delete({
         where: { replyId_userId: { replyId, userId } },
       });
-      return res.status(200).json({ message: 'Reply like removed' });
+
+      const likesCount = await prisma.replyLike.count({
+        where: { replyId },
+      });
+
+      return res.status(200).json({
+        message: 'Reply like removed',
+        isLiked: false,
+        likesCount,
+      });
     }
 
     await prisma.replyLike.create({ data: { replyId, userId } });
 
-    res.status(201).json({ message: 'Reply like successfully' });
+    const likesCount = await prisma.replyLike.count({
+      where: { replyId },
+    });
+
+    const isLiked =
+      (await prisma.replyLike.findUnique({
+        where: { replyId_userId: { replyId, userId } },
+      })) !== null;
+
+    res.status(201).json({
+      message: 'Reply like added',
+      isLiked,
+      likesCount,
+    });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: 'Error toggling reply like', error });
   }
 }
 
 export async function getThreadReplies(req: Request, res: Response) {
   const threadId = parseInt(req.params.threadId);
+  const userId = (req as any).user.id;
 
   try {
     const replies = await prisma.reply.findMany({
@@ -230,6 +257,10 @@ export async function getThreadReplies(req: Request, res: Response) {
             likes: true,
           },
         },
+        likes: {
+          where: { userId },
+          select: { userId: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -237,7 +268,7 @@ export async function getThreadReplies(req: Request, res: Response) {
     const formattedReplies = replies.map((reply) => ({
       id: reply.id,
       content: reply.content,
-      image:reply.image,
+      image: reply.image,
       createdAt: reply.createdAt,
       duration: formatDuration(reply.createdAt),
       author: {
@@ -247,6 +278,7 @@ export async function getThreadReplies(req: Request, res: Response) {
         avatarImage: reply.user.avatarImage,
       },
       likesCount: reply._count.likes,
+      isLiked: reply.likes.some((like) => like.userId === userId),
     }));
     res.status(200).json({
       message: 'Replies retrieved successfully',
@@ -255,5 +287,59 @@ export async function getThreadReplies(req: Request, res: Response) {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Error getting replies', error });
+  }
+}
+
+export async function deleteReply(req: Request, res: Response) {
+  const replyId = parseInt(req.params.replyId);
+  const userId = (req as any).user.id;
+
+  try {
+    const reply = await prisma.reply.findUnique({
+      where: { id: replyId },
+    });
+
+    if (!reply) {
+      return res.status(404).json({ message: 'Reply not found' });
+    }
+
+    const thread = await prisma.thread.findUnique({
+      where: { id: reply.threadId },
+    });
+
+    if (!thread) {
+      return res.status(404).json({ message: 'Thread not found' });
+    }
+
+    if (reply.userId !== userId && thread.authorId !== userId) {
+      return res.status(401).json({ message: 'User not authorized to delete this reply' });
+    }
+
+    let newImageUrl = null;
+    if (reply.image) {
+      try {
+        const publicId = extractPublicIdFromUrl(reply.image);
+        const newPublicId = `circle/delete-reply/${publicId.split('/').pop()}`;
+        const result = await cloudinary.uploader.rename(publicId, newPublicId);
+
+        newImageUrl = result.secure_url;
+      } catch (error) {
+        console.error('Error moving image to delete-reply folder:', error);
+        return res.status(500).json({ message: 'Error moving image', error });
+      }
+    }
+
+    await prisma.reply.update({
+      where: { id: replyId },
+      data: {
+        isDeleted: 1,
+        image: newImageUrl || reply.image,
+      },
+    });
+
+    res.status(200).json({ message: 'Reply deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting reply:', error);
+    res.status(500).json({ message: 'Error deleting reply', error });
   }
 }

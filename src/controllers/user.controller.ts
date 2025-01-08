@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { uploadImageToCloudinary } from '../utils/uploadImageToCloudinary';
+import { extractPublicIdFromUrl } from '../utils/extractPublicIdFromUrl';
+import cloudinary from '../config/cloudinaryConfig';
 
 const prisma = new PrismaClient();
 
@@ -101,6 +103,58 @@ export async function getCurrentUser(req: Request, res: Response) {
   }
 }
 
+export async function getUserById(req: Request, res: Response) {
+  const id = parseInt(req.params.id);
+  const userId = (req as any).user.id;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        followers: {
+          where: { followerId: userId },
+          select: {
+            followerId: true,
+          },
+        },
+        following: {
+          where: { followingId: userId },
+          select: {
+            followingId: true,
+          },
+        },
+        _count: {
+          select: {
+            followers: true,
+            following: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json({
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      fullname: user.fullname,
+      bio: user.bio,
+      coverImage: user.coverImage,
+      avatarImage: user.avatarImage,
+      isFollowed: user.followers.length > 0,
+      isFollowedByTarget: user.following.length > 0,
+      followersCount: user._count.followers,
+      followingCount: user._count.following,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error fetching user', error });
+  }
+}
+
 export async function updateUser(req: Request, res: Response) {
   const { fullname, username, email, bio } = req.body;
   const userId = (req as any).user.id;
@@ -120,13 +174,22 @@ export async function updateUser(req: Request, res: Response) {
       } else {
         if (req.files['coverImage']) {
           const coverImageFile = req.files['coverImage'][0];
+          if (user.coverImage) {
+            const publicId = extractPublicIdFromUrl(user.coverImage);
+            await cloudinary.uploader.destroy(publicId);
+          }
           uploadedImages['coverImage'] = await uploadImageToCloudinary(
             coverImageFile,
             'circle/profile',
           );
         }
+
         if (req.files['avatarImage']) {
           const avatarImageFile = req.files['avatarImage'][0];
+          if (user.avatarImage) {
+            const publicId = extractPublicIdFromUrl(user.avatarImage);
+            await cloudinary.uploader.destroy(publicId);
+          }
           uploadedImages['avatarImage'] = await uploadImageToCloudinary(
             avatarImageFile,
             'circle/profile',

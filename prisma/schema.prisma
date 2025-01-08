@@ -89,3 +89,12 @@ model ReplyLike {
 
   @@unique([replyId, userId])
 }
+
+model PasswordResetToken {
+  id          Int      @id @default(autoincrement())
+  email       String
+  token       String   @unique
+  expiryDate  DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
