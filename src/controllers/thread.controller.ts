@@ -12,8 +12,6 @@ export async function getAllThreads(req: Request, res: Response) {
 
   try {
     const allThreads = await prisma.thread.findMany({
-      skip: 3,
-      take:3,
       where: {
         isDeleted: 0,
       },
