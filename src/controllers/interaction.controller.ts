@@ -166,15 +166,46 @@ export async function createReply(req: Request, res: Response) {
         createdAt,
         image: imagePath,
       },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            fullname: true,
+            avatarImage: true,
+          },
+        },
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
+        likes: {
+          where: { userId },
+          select: { userId: true },
+        },
+      },
     });
 
-    const formattedDuration = formatDuration(createdAt);
+    const formattedReply = {
+      id: newReply.id,
+      content: newReply.content,
+      image: newReply.image,
+      createdAt: newReply.createdAt,
+      duration: formatDuration(newReply.createdAt),
+      author: {
+        id: newReply.user.id,
+        username: newReply.user.username,
+        fullname: newReply.user.fullname,
+        avatarImage: newReply.user.avatarImage,
+      },
+      likesCount: newReply._count.likes,
+      isLiked: newReply.likes.some((like) => like.userId === userId),
+    };
 
     return res.status(201).json({
       message: 'Reply created successfully',
-      ...newReply,
-      authorId: userId,
-      duration: formattedDuration,
+      reply: formattedReply,
     });
   } catch (error) {
     res.status(500).json({ message: 'Error creating reply', error });
